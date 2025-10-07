@@ -1,0 +1,26 @@
+﻿# test-functionality.http
+# Guarda este archivo en tu proyecto
+
+### Variables
+@baseUrl = https://localhost:7026
+
+### 🧪 PRUEBA 1: Verificar que las entidades funcionan
+GET {{baseUrl}}/api/Test/test-entities
+
+### 🧪 PRUEBA 2: Probar integración con IA
+POST {{baseUrl}}/api/Test/test-ai-integration
+
+### 🧪 PRUEBA 3: Probar vector service
+POST {{baseUrl}}/api/Test/test-vector-integration
+
+### 🧪 PRUEBA 4: Probar flujo completo
+POST {{baseUrl}}/api/Test/test-full-flow
+
+### 🧪 PRUEBA 5: Verificar que el chat sigue funcionando
+POST {{baseUrl}}/api/Chat/message
+Content-Type: application/json
+
+{
+  "message": "¿Qué es el derecho civil?",
+  "sessionId": null
+}

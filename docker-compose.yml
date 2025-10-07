@@ -1,0 +1,28 @@
+version: "3.9"
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+      - qdrant
+    environment:
+      ConnectionStrings__Default: "Host=db;Port=5432;Database=gc;Username=gc_user;Password=gc_pass"
+      QDRANT__URL: "http://qdrant:6333"
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: gc
+      POSTGRES_USER: gc_user
+      POSTGRES_PASSWORD: gc_pass
+    ports:
+      - "5433:5432"
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"

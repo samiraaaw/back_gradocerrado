@@ -1,0 +1,17 @@
+{
+    "name": "Grado Cerrado Dev",
+    "image": "mcr.microsoft.com/devcontainers/dotnet:8.0",
+    "features": {
+        "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-dotnettools.csharp",
+                "ms-azuretools.vscode-docker"
+            ]
+        }
+    },
+    "forwardPorts": [5000, 5001, 8080],
+    "postCreateCommand": "dotnet restore"
+}

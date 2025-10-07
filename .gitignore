@@ -1,0 +1,29 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+
+# VS Code
+.vscode/
+.history/
+
+# Node
+node_modules/
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# ✅ PROTEGER CREDENCIALES Y CONFIGURACIÓN SENSIBLE
+*.env
+secrets.json
+.vs/
+
+# ✅ PROTEGER ARCHIVOS DE CONFIGURACIÓN CON CREDENCIALES
+appsettings.Development.json
+appsettings.Production.json
+appsettings.Local.json
+
+# ✅ PERMITIR SOLO EL TEMPLATE BASE (sin credenciales)
+!appsettings.json

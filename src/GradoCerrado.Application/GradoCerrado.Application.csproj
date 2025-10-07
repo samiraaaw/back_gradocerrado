@@ -1,0 +1,17 @@
+﻿<!-- 📁 src/GradoCerrado.Application/GradoCerrado.Application.csproj -->
+<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<TargetFramework>net9.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\GradoCerrado.Domain\GradoCerrado.Domain.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- ✅ SI TIENES ALGUNA REFERENCIA A EF CORE AQUÍ, USAR 9.0.9 -->
+		<PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.9" />
+	</ItemGroup>
+</Project>
