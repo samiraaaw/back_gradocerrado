@@ -102,6 +102,7 @@ public class QdrantService : IVectorService
         public ulong indexed_vectors_count { get; set; }
         public string status { get; set; } = "unknown";
     }
+    
     public async Task<bool> CollectionExistsAsync()
     {
         try
@@ -170,16 +171,21 @@ public class QdrantService : IVectorService
         }
     }
 
-    public async Task<string> AddDocumentAsync(string content, Dictionary<string, object> metadata)
+    /// <summary>
+    /// Agrega un documento con embedding pre-calculado (OPTIMIZADO para batch)
+    /// </summary>
+    public async Task<string> AddDocumentAsync(
+        string content,
+        Dictionary<string, object> metadata,
+        float[] embedding)
     {
         try
         {
             var documentId = Guid.NewGuid().ToString();
 
-            // Generar embedding real del contenido usando OpenAI
-            var vector = await _embeddingService.GenerateEmbeddingAsync(content);
+            // ✅ USAR EMBEDDING PRE-CALCULADO (sin generar nuevamente)
+            // Esto es crítico para la optimización batch en DocumentController
 
-            // Preparar payload
             var payload = new Dictionary<string, object>(metadata)
             {
                 ["content"] = content
@@ -188,14 +194,11 @@ public class QdrantService : IVectorService
             var point = new
             {
                 id = documentId,
-                vector = vector,
+                vector = embedding, // ✅ Usar embedding pre-calculado
                 payload = payload
             };
 
-            var upsertRequest = new
-            {
-                points = new[] { point }
-            };
+            var upsertRequest = new { points = new[] { point } };
 
             var json = JsonSerializer.Serialize(upsertRequest);
             var httpContent = new StringContent(json, Encoding.UTF8, "application/json");
@@ -207,7 +210,7 @@ public class QdrantService : IVectorService
 
             if (response.IsSuccessStatusCode)
             {
-                _logger.LogInformation("Documento agregado con embedding real: {DocumentId}", documentId);
+                _logger.LogDebug("Documento agregado con embedding pre-calculado: {DocumentId}", documentId);
                 return documentId;
             }
             else
@@ -221,6 +224,21 @@ public class QdrantService : IVectorService
             _logger.LogError(ex, "Error agregando documento");
             throw;
         }
+    }
+
+    /// <summary>
+    /// Método de compatibilidad: genera embedding y luego lo guarda
+    /// Útil cuando se agrega un solo documento sin batch
+    /// </summary>
+    public async Task<string> AddDocumentAsync(string content, Dictionary<string, object> metadata)
+    {
+        // Generar embedding real usando OpenAI para un solo documento
+        var embedding = await _embeddingService.GenerateEmbeddingAsync(content);
+        
+        _logger.LogDebug("Embedding generado individualmente para documento único");
+        
+        // Llamar a la sobrecarga con el embedding generado
+        return await AddDocumentAsync(content, metadata, embedding);
     }
 
     public async Task<List<SearchResult>> SearchSimilarAsync(string query, int limit = 5)

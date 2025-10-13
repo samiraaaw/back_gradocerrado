@@ -15,6 +15,16 @@ public partial class Estudiante
     public string PasswordHash { get; set; } = null!;
     public string? FotoPerfil { get; set; }
     public string? IdAvatarSeleccionado { get; set; }
+    public bool ModoAdaptativoActivo { get; set; } = false;
+    public DateTime? FechaModificacion { get; set; }
+
+    // ✅ Recordatorios
+
+    public int? FrecuenciaEstudioSemanal { get; set; }
+    public string? ObjetivoDiasEstudio { get; set; }
+    public string? DiasPreferidosEstudio { get; set; }
+    public bool? RecordatorioEstudioActivo { get; set; }
+    public TimeOnly? HoraRecordatorio { get; set; }
 
     // Columnas adicionales que tienes en tu BD
     public string? NivelActual { get; set; }

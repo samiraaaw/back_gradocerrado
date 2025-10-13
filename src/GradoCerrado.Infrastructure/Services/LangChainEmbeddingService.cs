@@ -1,4 +1,6 @@
 ﻿// 📁 src/GradoCerrado.Infrastructure/Services/LangChainEmbeddingService.cs
+// REEMPLAZAR COMPLETAMENTE
+
 using GradoCerrado.Application.Interfaces;
 using GradoCerrado.Infrastructure.Configuration;
 using Microsoft.Extensions.Options;
@@ -7,21 +9,25 @@ using LangChain.Providers.OpenAI;
 
 namespace GradoCerrado.Infrastructure.Services;
 
-/// <summary>
-/// Servicio de embeddings usando LangChain + OpenAI
-/// </summary>
 public class LangChainEmbeddingService : IEmbeddingService
 {
     private readonly OpenAiProvider _provider;
     private readonly OpenAISettings _settings;
     private readonly ILogger<LangChainEmbeddingService> _logger;
+    private readonly IRateLimiter _rateLimiter;
+
+    // Límites de OpenAI
+    private const int MAX_TEXTS_PER_BATCH = 100; // Límite de OpenAI
+    private const int MAX_TOKENS_PER_REQUEST = 8000; // Para text-embedding-ada-002
 
     public LangChainEmbeddingService(
         IOptions<OpenAISettings> settings,
-        ILogger<LangChainEmbeddingService> logger)
+        ILogger<LangChainEmbeddingService> logger,
+        IRateLimiter rateLimiter)
     {
         _settings = settings.Value;
         _logger = logger;
+        _rateLimiter = rateLimiter;
         _provider = new OpenAiProvider(_settings.ApiKey);
     }
 
@@ -29,60 +35,138 @@ public class LangChainEmbeddingService : IEmbeddingService
     {
         try
         {
-            // ✅ Usar modelo de embeddings de LangChain
+            await _rateLimiter.WaitIfNeededAsync();
+
             var embeddingModel = new OpenAiEmbeddingModel(
                 provider: _provider,
                 id: "text-embedding-ada-002");
 
-            // ✅ Generar embedding
             var response = await embeddingModel.CreateEmbeddingsAsync(text);
 
-            // ✅ Retornar como float[]
+            _rateLimiter.RecordRequest();
+
             return response.Values.First().ToArray();
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error generando embedding para texto de {Length} caracteres", text.Length);
+            _rateLimiter.RecordError();
+            _logger.LogError(ex, "Error generando embedding");
+            throw;
+        }
+    }// 📁 src/GradoCerrado.Infrastructure/Services/LangChainEmbeddingService.cs
+     // REEMPLAZAR EL MÉTODO GenerateEmbeddingsAsync COMPLETO:
+
+    public async Task<List<float[]>> GenerateEmbeddingsAsync(List<string> texts)
+    {
+        if (!texts.Any())
+            return new List<float[]>();
+
+        try
+        {
+            var allEmbeddings = new List<float[]>();
+
+            // 🔧 PROCESAR EN LOTES MÁS PEQUEÑOS (LangChain/OpenAI tiene límites)
+            const int BATCH_SIZE = 20; // Procesar 20 textos por llamada (más seguro)
+
+            var batches = texts
+                .Select((text, index) => new { text, index })
+                .GroupBy(x => x.index / BATCH_SIZE)
+                .Select(g => g.Select(x => x.text).ToList())
+                .ToList();
+
+            _logger.LogInformation(
+                "🔢 Generando embeddings: {Total} textos en {Batches} lote(s) de máximo {BatchSize}",
+                texts.Count, batches.Count, BATCH_SIZE);
+
+            for (int batchIndex = 0; batchIndex < batches.Count; batchIndex++)
+            {
+                var batch = batches[batchIndex];
+
+                // ✅ ESPERAR SLOT DISPONIBLE
+                await _rateLimiter.WaitIfNeededAsync();
+
+                _logger.LogInformation(
+                    "📦 Procesando lote {Current}/{Total} ({Count} textos)...",
+                    batchIndex + 1, batches.Count, batch.Count);
+
+                // 🔧 PROCESAR CADA TEXTO DEL LOTE SECUENCIALMENTE
+                // (LangChain no soporta batch nativo bien)
+                var batchEmbeddings = new List<float[]>();
+
+                foreach (var text in batch)
+                {
+                    var embeddingModel = new OpenAiEmbeddingModel(
+                        provider: _provider,
+                        id: "text-embedding-ada-002");
+
+                    // Generar embedding para este texto individual
+                    var response = await embeddingModel.CreateEmbeddingsAsync(text);
+                    var embedding = response.Values.First().ToArray();
+                    batchEmbeddings.Add(embedding);
+
+                    // Mini delay entre textos del mismo lote (200ms)
+                    if (batch.Count > 1)
+                    {
+                        await Task.Delay(200);
+                    }
+                }
+
+                _rateLimiter.RecordRequest();
+
+                allEmbeddings.AddRange(batchEmbeddings);
+
+                _logger.LogInformation(
+                    "✅ Lote {Current}/{Total} completado ({Embeddings} embeddings generados)",
+                    batchIndex + 1, batches.Count, batchEmbeddings.Count);
+            }
+
+            _logger.LogInformation(
+                "✅ TOTAL: {Count} embeddings generados exitosamente",
+                allEmbeddings.Count);
+
+            return allEmbeddings;
+        }
+        catch (Exception ex)
+        {
+            _rateLimiter.RecordError();
+            _logger.LogError(ex, "❌ Error generando embeddings en lote");
             throw;
         }
     }
 
-    public async Task<List<float[]>> GenerateEmbeddingsAsync(List<string> texts)
+    // 🆕 DIVIDIR EN LOTES INTELIGENTES
+    private List<List<string>> SplitIntoBatches(List<string> texts, int maxBatchSize)
     {
-        try
+        var batches = new List<List<string>>();
+        var currentBatch = new List<string>();
+        var currentTokenCount = 0;
+
+        foreach (var text in texts)
         {
-            var embeddings = new List<float[]>();
+            // Estimar tokens (1 token ≈ 4 caracteres)
+            var estimatedTokens = text.Length / 4;
 
-            // Procesar en lotes para evitar límites de rate
-            const int batchSize = 5;
-            for (int i = 0; i < texts.Count; i += batchSize)
+            // Si agregar este texto excede límites, cerrar lote actual
+            if ((currentBatch.Count >= maxBatchSize) ||
+                (currentTokenCount + estimatedTokens > MAX_TOKENS_PER_REQUEST))
             {
-                var batch = texts.Skip(i).Take(batchSize).ToList();
-
-                // Procesar batch en paralelo
-                var batchTasks = batch.Select(text => GenerateEmbeddingAsync(text));
-                var batchResults = await Task.WhenAll(batchTasks);
-
-                embeddings.AddRange(batchResults);
-
-                // Pequeña pausa entre lotes
-                if (i + batchSize < texts.Count)
+                if (currentBatch.Any())
                 {
-                    await Task.Delay(100);
+                    batches.Add(currentBatch);
+                    currentBatch = new List<string>();
+                    currentTokenCount = 0;
                 }
-
-                _logger.LogInformation(
-                    "Procesados {Current}/{Total} embeddings",
-                    Math.Min(i + batchSize, texts.Count),
-                    texts.Count);
             }
 
-            return embeddings;
+            currentBatch.Add(text);
+            currentTokenCount += estimatedTokens;
         }
-        catch (Exception ex)
+
+        if (currentBatch.Any())
         {
-            _logger.LogError(ex, "Error generando embeddings en lote");
-            throw;
+            batches.Add(currentBatch);
         }
+
+        return batches;
     }
 }

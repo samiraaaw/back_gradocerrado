@@ -1,10 +1,9 @@
-﻿using LangChain.Providers.OpenAI;
+using LangChain.Providers.OpenAI;
 using GradoCerrado.Application.Interfaces;
 using GradoCerrado.Domain.Entities;
 using GradoCerrado.Infrastructure.Configuration;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging;
-using GradoCerrado.Infrastructure.DTOs;
 
 namespace GradoCerrado.Infrastructure.Services;
 
@@ -13,18 +12,21 @@ public class LangChainQuestionService : IAIService
     private readonly OpenAiProvider _provider;
     private readonly OpenAISettings _settings;
     private readonly ILogger<LangChainQuestionService> _logger;
+    private readonly IRateLimiter _rateLimiter;
 
     public LangChainQuestionService(
         IOptions<OpenAISettings> settings,
-        ILogger<LangChainQuestionService> logger)
+        ILogger<LangChainQuestionService> logger,
+        IRateLimiter rateLimiter)
     {
         _settings = settings.Value;
         _logger = logger;
+        _rateLimiter = rateLimiter;
         _provider = new OpenAiProvider(_settings.ApiKey);
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // 1️⃣ GenerateStructuredQuestionsAsync - CON PROMPTS MEJORADOS
+    // 1️⃣ GenerateStructuredQuestionsAsync
     // ═══════════════════════════════════════════════════════════════
 
     public async Task<string> GenerateStructuredQuestionsAsync(
@@ -37,8 +39,11 @@ public class LangChainQuestionService : IAIService
         try
         {
             _logger.LogInformation(
-                "Generando {Count} preguntas {Type} de nivel {Difficulty} sobre {Area}",
-                count, type, difficulty, legalArea);
+                "🤖 Generando {Count} preguntas {Type} nivel {Difficulty}",
+                count, type, difficulty);
+
+            // 🆕 ESPERAR SLOT DISPONIBLE (Rate Limiting)
+            await _rateLimiter.WaitIfNeededAsync();
 
             var model = new OpenAiChatModel(_provider, _settings.Model);
 
@@ -50,14 +55,8 @@ public class LangChainQuestionService : IAIService
                 : GetTrueFalseFormat(difficulty);
 
             var prompt = BuildEnhancedQuestionPrompt(
-                sourceText,
-                legalArea,
-                type,
-                difficulty,
-                difficultyInstructions,
-                count,
-                formatExample
-            );
+                sourceText, legalArea, type, difficulty,
+                difficultyInstructions, count, formatExample);
 
             string responseText = "";
             await foreach (var response in model.GenerateAsync(
@@ -67,14 +66,19 @@ public class LangChainQuestionService : IAIService
                 responseText = response.Messages.Last().Content;
             }
 
+            // 🆕 REGISTRAR ÉXITO
+            _rateLimiter.RecordRequest();
+
             string jsonResponse = ExtractJson(responseText);
-            _logger.LogInformation("Preguntas generadas exitosamente");
+            _logger.LogInformation("✅ Preguntas generadas exitosamente");
 
             return jsonResponse;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error generando preguntas");
+            // 🆕 REGISTRAR ERROR
+            _rateLimiter.RecordError();
+            _logger.LogError(ex, "❌ Error generando preguntas");
             throw;
         }
     }
@@ -91,8 +95,10 @@ public class LangChainQuestionService : IAIService
     {
         try
         {
-            var model = new OpenAiChatModel(_provider, _settings.Model);
+            await _rateLimiter.WaitIfNeededAsync();
 
+            var model = new OpenAiChatModel(_provider, _settings.Model);
+            
             var prompt = BuildExplanationPrompt(
                 questionText, chosenAnswer, correctAnswer, wasCorrect);
 
@@ -103,10 +109,12 @@ public class LangChainQuestionService : IAIService
                 responseText = response.Messages.Last().Content;
             }
 
+            _rateLimiter.RecordRequest();
             return responseText.Trim();
         }
         catch (Exception ex)
         {
+            _rateLimiter.RecordError();
             _logger.LogError(ex, "Error generando explicación");
             throw;
         }
@@ -124,8 +132,9 @@ public class LangChainQuestionService : IAIService
     {
         try
         {
-            var model = new OpenAiChatModel(_provider, _settings.Model);
+            await _rateLimiter.WaitIfNeededAsync();
 
+            var model = new OpenAiChatModel(_provider, _settings.Model);
             var prompt = $@"
 Eres un evaluador experto de exámenes de grado de Derecho chileno.
 
@@ -152,10 +161,12 @@ RESPONDE EN JSON:
                 responseText = response.Messages.Last().Content;
             }
 
+            _rateLimiter.RecordRequest();
             return responseText;
         }
         catch (Exception ex)
         {
+            _rateLimiter.RecordError();
             _logger.LogError(ex, "Error evaluando respuesta oral");
             throw;
         }
@@ -169,6 +180,8 @@ RESPONDE EN JSON:
     {
         try
         {
+            await _rateLimiter.WaitIfNeededAsync();
+
             var model = new OpenAiChatModel(_provider, _settings.Model);
 
             string responseText = "";
@@ -177,17 +190,19 @@ RESPONDE EN JSON:
                 responseText = response.Messages.Last().Content;
             }
 
+            _rateLimiter.RecordRequest();
             return responseText.Trim();
         }
         catch (Exception ex)
         {
+            _rateLimiter.RecordError();
             _logger.LogError(ex, "Error generando respuesta");
             throw;
         }
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // MÉTODOS PRIVADOS AUXILIARES
+    // MÉTODOS AUXILIARES PRIVADOS
     // ═══════════════════════════════════════════════════════════════
 
     private string GetDifficultyInstructions(DifficultyLevel difficulty)
@@ -251,9 +266,11 @@ TEXTO FUENTE:
 INSTRUCCIONES CRÍTICAS:
 1. Las preguntas deben basarse ÚNICAMENTE en el texto proporcionado
 2. Ajusta la complejidad al nivel {difficulty} especificado
-3. Las opciones incorrectas deben ser plausibles pero claramente erróneas
-4. Cada pregunta debe tener una explicación clara
-5. Distribuye las preguntas en diferentes partes del texto
+3. Genera EXACTAMENTE 3 opciones (A, B, C) por pregunta
+4. Solo una opción debe ser correcta
+5. Las opciones incorrectas deben ser plausibles pero claramente erróneas
+6. Cada pregunta debe tener una explicación clara
+7. Distribuye las preguntas en diferentes partes del texto
 
 FORMATO JSON (responde SOLO JSON válido):
 {formatExample}
@@ -298,8 +315,7 @@ Explica brevemente:
       ""options"": [
         {{""id"": ""A"", ""text"": ""Opción plausible incorrecta"", ""isCorrect"": false}},
         {{""id"": ""B"", ""text"": ""Respuesta correcta basada en el texto"", ""isCorrect"": true}},
-        {{""id"": ""C"", ""text"": ""Opción plausible incorrecta"", ""isCorrect"": false}},
-        {{""id"": ""D"", ""text"": ""Opción plausible incorrecta"", ""isCorrect"": false}}
+        {{""id"": ""C"", ""text"": ""Opción plausible incorrecta"", ""isCorrect"": false}}
       ],
       ""explanation"": ""Explicación clara basada en el texto fuente"",
       ""relatedConcepts"": [""concepto1"", ""concepto2""],

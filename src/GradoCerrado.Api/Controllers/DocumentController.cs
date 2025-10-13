@@ -1,4 +1,4 @@
-﻿// src/GradoCerrado.Api/Controllers/DocumentController.cs
+// src/GradoCerrado.Api/Controllers/DocumentController.cs
 using GradoCerrado.Application.Interfaces;
 using GradoCerrado.Domain.Entities;
 using Microsoft.AspNetCore.Mvc;
@@ -11,34 +11,43 @@ namespace GradoCerrado.Api.Controllers;
 [Route("api/[controller]")]
 public class DocumentController : ControllerBase
 {
-    private readonly IDocumentProcessingService _documentProcessing;
-    private readonly IVectorService _vectorService;
-    private readonly IQuestionGenerationService _questionGeneration;
     private readonly ILogger<DocumentController> _logger;
+    private readonly IVectorService _vectorService;
+    private readonly IDocumentProcessingService _documentProcessing;
     private readonly ITextChunkingService _textChunking;
-    private readonly IMetadataBuilderService _metadataBuilder;
-    private readonly IDocumentExtractionService _documentExtraction;
+    private readonly IQuestionGenerationService _questionGeneration;
     private readonly IQuestionPersistenceService _questionPersistence;
+    private readonly IEmbeddingService _embeddingService;
+    private readonly IDocumentExtractionService _documentExtraction;
+    private readonly IMetadataBuilderService _metadataBuilder;
+    private readonly IContentClassifierService _contentClassifier;
 
     public DocumentController(
-        IDocumentProcessingService documentProcessing,
-        IVectorService vectorService,
-        IQuestionGenerationService questionGeneration,
         ILogger<DocumentController> logger,
-        IDocumentExtractionService documentExtraction,
+        IVectorService vectorService,
+        IDocumentProcessingService documentProcessing,
         ITextChunkingService textChunking,
+        IQuestionGenerationService questionGeneration,
+        IQuestionPersistenceService questionPersistence,
+        IDocumentExtractionService documentExtraction,
         IMetadataBuilderService metadataBuilder,
-        IQuestionPersistenceService questionPersistence)
+        IContentClassifierService contentClassifier,
+        IEmbeddingService embeddingService)
     {
-        _documentProcessing = documentProcessing;
-        _vectorService = vectorService;
-        _questionPersistence = questionPersistence;
         _logger = logger;
-        _documentExtraction = documentExtraction;
+        _vectorService = vectorService;
+        _documentProcessing = documentProcessing;
         _textChunking = textChunking;
-        _metadataBuilder = metadataBuilder;
         _questionGeneration = questionGeneration;
+        _questionPersistence = questionPersistence;
+        _documentExtraction = documentExtraction;
+        _metadataBuilder = metadataBuilder;
+        _contentClassifier = contentClassifier;
+        _embeddingService = embeddingService;
     }
+
+    // 📁 src/GradoCerrado.Api/Controllers/DocumentController.cs
+    // MÉTODO COMPLETO Y OPTIMIZADO
 
     [HttpPost("upload")]
     public async Task<ActionResult<EnhancedDocumentUploadResponse>> UploadDocument(
@@ -46,11 +55,21 @@ public class DocumentController : ControllerBase
         [FromQuery] int? areaId = null,
         [FromQuery] int? totalQuestions = null)
     {
+        var startTime = DateTime.UtcNow;
+
         try
         {
+            // ════════════════════════════════════════════════════════
+            // 1️⃣ VALIDACIONES
+            // ════════════════════════════════════════════════════════
+
             if (file == null || file.Length == 0)
             {
-                return BadRequest("No se ha enviado ningún archivo");
+                return BadRequest(new EnhancedDocumentUploadResponse
+                {
+                    Success = false,
+                    Message = "No se ha enviado ningún archivo"
+                });
             }
 
             var allowedTypes = new[] { ".txt", ".pdf", ".docx", ".md" };
@@ -58,27 +77,66 @@ public class DocumentController : ControllerBase
 
             if (!allowedTypes.Contains(fileExtension))
             {
-                return BadRequest($"Tipo de archivo no soportado. Tipos permitidos: {string.Join(", ", allowedTypes)}");
+                return BadRequest(new EnhancedDocumentUploadResponse
+                {
+                    Success = false,
+                    Message = $"Tipo de archivo no soportado. Tipos permitidos: {string.Join(", ", allowedTypes)}"
+                });
             }
 
-            // 1️⃣ EXTRAER CONTENIDO
+            _logger.LogInformation(
+                "📄 Iniciando procesamiento: {FileName} ({Size} KB, {Type})",
+                file.FileName, file.Length / 1024, fileExtension);
+
+            // ════════════════════════════════════════════════════════
+            // 2️⃣ EXTRAER CONTENIDO
+            // ════════════════════════════════════════════════════════
+
             using var stream = file.OpenReadStream();
             string content = await _documentExtraction.ExtractTextFromFileAsync(stream, file.FileName);
 
             if (string.IsNullOrWhiteSpace(content))
             {
-                return BadRequest("El archivo está vacío o no se pudo extraer el contenido");
+                return BadRequest(new EnhancedDocumentUploadResponse
+                {
+                    Success = false,
+                    Message = "El archivo está vacío o no se pudo extraer el contenido"
+                });
             }
 
-            _logger.LogInformation("📄 Procesando documento: {FileName}", file.FileName);
+            _logger.LogInformation(
+                "✅ Contenido extraído: {Chars} caracteres (~{Pages} páginas)",
+                content.Length, content.Length / 3000);
 
-            // 2️⃣ PROCESAR DOCUMENTO
-            var document = await _documentProcessing.ProcessDocumentAsync(content, file.FileName);
+            // ════════════════════════════════════════════════════════
+            // 3️⃣ PROCESAR DOCUMENTO (AI: clasificación, conceptos, etc)
+            // ════════════════════════════════════════════════════════
 
-            // 3️⃣ CREAR CHUNKS
-            var chunks = await _textChunking.CreateChunksAsync(content, maxChunkSize: 500, overlap: 100);
+            var document = await _documentProcessing.ProcessDocumentAsync(
+                content,
+                file.FileName);
 
-            // 4️⃣ VECTORIZAR
+            _logger.LogInformation(
+                "📋 Documento procesado: Tipo={Type}, Dificultad={Difficulty}, Áreas={Areas}",
+                document.DocumentType, document.Difficulty, string.Join(", ", document.LegalAreas));
+
+            // ════════════════════════════════════════════════════════
+            // 4️⃣ CREAR CHUNKS
+            // ════════════════════════════════════════════════════════
+
+            var chunks = await _textChunking.CreateChunksAsync(
+                content,
+                maxChunkSize: 500,
+                overlap: 100);
+
+            _logger.LogInformation(
+                "✂️ {Count} chunks creados (promedio: {Avg} caracteres por chunk)",
+                chunks.Count, chunks.Any() ? (int)chunks.Average(c => c.Length) : 0);
+
+            // ════════════════════════════════════════════════════════
+            // 5️⃣ PREPARAR METADATA
+            // ════════════════════════════════════════════════════════
+
             var fileInfo = new GradoCerrado.Infrastructure.Services.FileInfo
             {
                 FileName = file.FileName,
@@ -87,72 +145,254 @@ public class DocumentController : ControllerBase
             };
 
             var baseMetadata = _metadataBuilder.BuildFromFile(document, fileInfo);
-            var chunkMetadataList = _metadataBuilder.BuildChunkMetadataList(baseMetadata, chunks.Count, document.Id);
+            var chunkMetadataList = _metadataBuilder.BuildChunkMetadataList(
+                baseMetadata,
+                chunks.Count,
+                document.Id);
 
-            var chunkIds = new List<string>();
-            for (int i = 0; i < chunks.Count; i++)
+            // ════════════════════════════════════════════════════════
+            // 6️⃣ VECTORIZACIÓN BATCH (OPTIMIZADA)
+            // ════════════════════════════════════════════════════════
+
+            _logger.LogInformation(
+                "🔢 INICIANDO VECTORIZACIÓN BATCH de {Count} chunks...",
+                chunks.Count);
+
+            var vectorizationStart = DateTime.UtcNow;
+
+            // ✅ UNA (o pocas) llamadas para TODOS los embeddings
+            var embeddings = await _embeddingService.GenerateEmbeddingsAsync(chunks);
+
+            if (embeddings.Count != chunks.Count)
             {
-                var vectorId = await _vectorService.AddDocumentAsync(chunks[i], chunkMetadataList[i]);
-                chunkIds.Add(vectorId);
-                _logger.LogInformation("📦 Chunk {Index}/{Total} vectorizado: {VectorId}", i + 1, chunks.Count, vectorId);
+                throw new InvalidOperationException(
+                    $"Error en vectorización: se esperaban {chunks.Count} embeddings pero se obtuvieron {embeddings.Count}");
             }
 
-            // 5️⃣ CALCULAR CANTIDAD INTELIGENTE DE PREGUNTAS
+            // Guardar cada chunk con su embedding en Qdrant
+            var chunkIds = new List<string>();
+
+            for (int i = 0; i < chunks.Count; i++)
+            {
+                var vectorId = await _vectorService.AddDocumentAsync(
+                    chunks[i],
+                    chunkMetadataList[i],
+                    embeddings[i]); // ✅ Embedding pre-calculado
+
+                chunkIds.Add(vectorId);
+
+                // Log de progreso cada 10 chunks
+                if ((i + 1) % 10 == 0 || i == chunks.Count - 1)
+                {
+                    _logger.LogDebug(
+                        "💾 Guardados {Current}/{Total} chunks en Qdrant",
+                        i + 1, chunks.Count);
+                }
+            }
+
+            var vectorizationTime = DateTime.UtcNow - vectorizationStart;
+
+            _logger.LogInformation(
+                "✅ Vectorización completa en {Seconds}s ({EmbeddingCalls} llamada(s) a OpenAI para embeddings)",
+                vectorizationTime.TotalSeconds,
+                Math.Ceiling(chunks.Count / 100.0)); // Batch de ~100
+
+            // ════════════════════════════════════════════════════════
+            // 7️⃣ CALCULAR CANTIDAD DE PREGUNTAS
+            // ════════════════════════════════════════════════════════
+
             int questionsToGenerate;
+
             if (totalQuestions.HasValue)
             {
                 questionsToGenerate = totalQuestions.Value;
-                _logger.LogInformation("👤 Cantidad manual: {Count} preguntas", questionsToGenerate);
+                _logger.LogInformation(
+                    "👤 Cantidad manual especificada: {Count} preguntas",
+                    questionsToGenerate);
             }
             else
             {
                 questionsToGenerate = CalculateOptimalQuestionCount(content.Length, chunks.Count);
-                _logger.LogInformation("🤖 Cantidad calculada: {Count} preguntas para {Chars} caracteres",
+                _logger.LogInformation(
+                    "🤖 Cantidad calculada automáticamente: {Count} preguntas para {Chars} caracteres",
                     questionsToGenerate, content.Length);
             }
 
-            // 6️⃣ GENERAR PREGUNTAS CON DISTRIBUCIÓN DE NIVELES
-            _logger.LogInformation("🤖 Generando {Count} preguntas con TODOS los niveles...", questionsToGenerate);
+            // ════════════════════════════════════════════════════════
+            // 8️⃣ GENERAR PREGUNTAS (CON RATE LIMITING)
+            // ════════════════════════════════════════════════════════
+
+            _logger.LogInformation(
+                "🤖 INICIANDO GENERACIÓN de {Count} preguntas con TODOS los niveles (esto puede tomar tiempo)...",
+                questionsToGenerate);
+
+            var questionStart = DateTime.UtcNow;
 
             var generatedQuestions = await _questionGeneration.GenerateQuestionsWithMixedDifficulty(
                 document,
-                questionsToGenerate
-            );
+                questionsToGenerate);
 
-            // 🆕 7️⃣ ASIGNAR CHUNKS A PREGUNTAS (TRAZABILIDAD)
-            AssignChunksToQuestions(generatedQuestions, chunkIds);
-
-            _logger.LogInformation("✅ Chunks asignados a {Count} preguntas", generatedQuestions.Count);
-
-            // 8️⃣ GUARDAR EN BD
-            int finalAreaId = areaId ?? await _questionPersistence.GetAreaIdByName(
-                document.LegalAreas.FirstOrDefault() ?? "General"
-            );
-
-            int temaId = await _questionPersistence.GetOrCreateTemaId(
-                document.Title,
-                finalAreaId
-            );
-
-            var savedQuestionIds = await _questionPersistence.SaveQuestionsToDatabase(
-                generatedQuestions,
-                temaId,
-                subtemaId: null,
-                modalidadId: 1,
-                creadaPor: $"AI-Document-{document.Id}"
-            );
-
-            // 9️⃣ LOGS DE RESUMEN
-            var breakdown = generatedQuestions.GroupBy(q => q.Difficulty)
-                .ToDictionary(g => g.Key, g => g.Count());
+            var questionTime = DateTime.UtcNow - questionStart;
 
             _logger.LogInformation(
-                "✅ {Total} preguntas guardadas - Básico: {Basic}, Intermedio: {Inter}, Avanzado: {Adv}",
-                savedQuestionIds.Count,
+                "✅ {Count} preguntas generadas en {Seconds}s",
+                generatedQuestions.Count, questionTime.TotalSeconds);
+
+            // ════════════════════════════════════════════════════════
+            // 9️⃣ ASIGNAR CHUNKS A PREGUNTAS (TRAZABILIDAD)
+            // ════════════════════════════════════════════════════════
+
+            AssignChunksToQuestions(generatedQuestions, chunkIds);
+
+            _logger.LogInformation(
+                "🔗 Trazabilidad establecida: chunks asignados a {Count} preguntas",
+                generatedQuestions.Count);
+
+            // ════════════════════════════════════════════════════════
+            // 🔟 CLASIFICAR Y GUARDAR EN BASE DE DATOS
+            // ════════════════════════════════════════════════════════
+
+            int finalAreaId = areaId ?? await _questionPersistence.GetAreaIdByName(
+                document.LegalAreas.FirstOrDefault() ?? "General");
+
+            // 🆕 CLASIFICAR CONTENIDO EN TEMAS/SUBTEMAS EXISTENTES
+            _logger.LogInformation("🔍 Clasificando contenido en temas existentes...");
+            var classifications = await _contentClassifier.ClassifyContentAsync(content, finalAreaId);
+
+            List<int> savedQuestionIds;
+            List<ClassificationInfo> classificationInfoList;
+
+            if (!classifications.Any())
+            {
+                // Fallback: usar método tradicional si no hay clasificaciones
+                _logger.LogWarning("⚠️ No se pudo clasificar automáticamente. Usando método tradicional...");
+                
+                int temaId = await _questionPersistence.GetOrCreateTemaId(
+                    document.Title,
+                    finalAreaId);
+
+                savedQuestionIds = await _questionPersistence.SaveQuestionsToDatabase(
+                    generatedQuestions,
+                    temaId,
+                    subtemaId: null,
+                    modalidadId: 1,
+                    creadaPor: $"AI-Document-{document.Id}");
+
+                classificationInfoList = new List<ClassificationInfo>
+                {
+                    new ClassificationInfo
+                    {
+                        TemaId = temaId,
+                        TemaNombre = document.Title,
+                        SubtemaId = null,
+                        SubtemaNombre = null,
+                        Confidence = 1.0
+                    }
+                };
+            }
+            else
+            {
+                // Usar clasificación automática
+                var mainClassification = classifications.First();
+                _logger.LogInformation(
+                    "✅ Contenido clasificado: Tema='{Tema}', Subtema='{Subtema}', Confianza={Conf:P0}",
+                    mainClassification.TemaNombre,
+                    mainClassification.SubtemaNombre ?? "N/A",
+                    mainClassification.Confidence);
+
+                // 🆕 DISTRIBUIR PREGUNTAS ENTRE CLASIFICACIONES
+                savedQuestionIds = new List<int>();
+                int questionsPerClassification = generatedQuestions.Count / classifications.Count;
+                int remainingQuestions = generatedQuestions.Count % classifications.Count;
+
+                for (int i = 0; i < classifications.Count; i++)
+                {
+                    var classification = classifications[i];
+                    int startIndex = i * questionsPerClassification;
+                    int count = questionsPerClassification + (i == 0 ? remainingQuestions : 0);
+
+                    var questionsForThisTema = generatedQuestions.Skip(startIndex).Take(count).ToList();
+
+                    if (questionsForThisTema.Any())
+                    {
+                        var ids = await _questionPersistence.SaveQuestionsToDatabase(
+                            questionsForThisTema,
+                            classification.TemaId,
+                            subtemaId: classification.SubtemaId,
+                            modalidadId: 1,
+                            creadaPor: $"AI-Document-{document.Id}"
+                        );
+
+                        savedQuestionIds.AddRange(ids);
+
+                        _logger.LogInformation(
+                            "💾 {Count} preguntas guardadas en Tema '{Tema}' {Subtema}",
+                            ids.Count,
+                            classification.TemaNombre,
+                            classification.SubtemaNombre != null ? $"/ Subtema '{classification.SubtemaNombre}'" : "");
+                    }
+                }
+
+                classificationInfoList = classifications.Select(c => new ClassificationInfo
+                {
+                    TemaId = c.TemaId,
+                    TemaNombre = c.TemaNombre,
+                    SubtemaId = c.SubtemaId,
+                    SubtemaNombre = c.SubtemaNombre,
+                    Confidence = c.Confidence
+                }).ToList();
+            }
+
+            // ════════════════════════════════════════════════════════
+            // 1️⃣1️⃣ PREPARAR RESUMEN
+            // ════════════════════════════════════════════════════════
+
+            var breakdown = generatedQuestions
+                .GroupBy(q => q.Difficulty)
+                .ToDictionary(g => g.Key, g => g.Count());
+
+            var totalTime = DateTime.UtcNow - startTime;
+
+            // ════════════════════════════════════════════════════════
+            // 1️⃣2️⃣ LOGGING FINAL
+            // ════════════════════════════════════════════════════════
+
+            _logger.LogInformation(@"
+╔══════════════════════════════════════════════════════════════╗
+║                  RESUMEN DE PROCESAMIENTO                    ║
+╠══════════════════════════════════════════════════════════════╣
+║  📄 Documento: {0,-49} ║
+║  📏 Tamaño: {1,-52} ║
+║  ✂️  Chunks creados: {2,-46} ║
+║  🔢 Vectorización: {3,-47} ║
+║  🤖 Generación preguntas: {4,-40} ║
+║                                                              ║
+║  📊 PREGUNTAS GENERADAS:                                     ║
+║     • Básicas: {5,-49} ║
+║     • Intermedias: {6,-45} ║
+║     • Avanzadas: {7,-47} ║
+║     • TOTAL: {8,-51} ║
+║                                                              ║
+║  🎯 Clasificadas en: {9,-45} ║
+║  ⏱️  TIEMPO TOTAL: {10,-47} ║
+║  🎯 API Calls: ~{11,-48} ║
+╚══════════════════════════════════════════════════════════════╝",
+                file.FileName,
+                $"{file.Length / 1024} KB",
+                chunks.Count,
+                $"{vectorizationTime.TotalSeconds:F1}s",
+                $"{questionTime.TotalSeconds:F1}s",
                 breakdown.GetValueOrDefault(DifficultyLevel.Basic, 0),
                 breakdown.GetValueOrDefault(DifficultyLevel.Intermediate, 0),
-                breakdown.GetValueOrDefault(DifficultyLevel.Advanced, 0)
-            );
+                breakdown.GetValueOrDefault(DifficultyLevel.Advanced, 0),
+                savedQuestionIds.Count,
+                $"{classificationInfoList.Count} tema(s)",
+                $"{totalTime.TotalSeconds:F1}s",
+                $"{Math.Ceiling(chunks.Count / 100.0) + generatedQuestions.Count} llamadas");
+
+            // ════════════════════════════════════════════════════════
+            // 1️⃣3️⃣ RETORNAR RESPUESTA
+            // ════════════════════════════════════════════════════════
 
             return Ok(new EnhancedDocumentUploadResponse
             {
@@ -164,27 +404,43 @@ public class DocumentController : ControllerBase
                 SampleQuestions = generatedQuestions.Take(5).ToList(),
                 QuestionsGeneratedCount = savedQuestionIds.Count,
                 SavedQuestionIds = savedQuestionIds,
+                ProcessingTimeMs = (int)totalTime.TotalMilliseconds,
                 QuestionBreakdown = new QuestionDifficultyBreakdown
                 {
                     Basico = breakdown.GetValueOrDefault(DifficultyLevel.Basic, 0),
                     Intermedio = breakdown.GetValueOrDefault(DifficultyLevel.Intermediate, 0),
                     Avanzado = breakdown.GetValueOrDefault(DifficultyLevel.Advanced, 0)
                 },
-                Message = $"Documento procesado: {chunks.Count} chunks, {savedQuestionIds.Count} preguntas generadas con trazabilidad"
+                Classifications = classificationInfoList,
+                Message = $"✅ Procesado en {totalTime.TotalSeconds:F1}s: " +
+                         $"{chunks.Count} chunks vectorizados (batch), " +
+                         $"{savedQuestionIds.Count} preguntas generadas y clasificadas en {classificationInfoList.Count} tema(s)"
             });
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "❌ Error procesando documento");
+            var totalTime = DateTime.UtcNow - startTime;
+
+            _logger.LogError(ex,
+                "❌ Error después de {Seconds}s procesando documento: {FileName}",
+                totalTime.TotalSeconds, file?.FileName ?? "unknown");
+
             return StatusCode(500, new EnhancedDocumentUploadResponse
             {
                 Success = false,
-                Message = $"Error: {ex.Message}"
+                Message = $"Error procesando documento: {ex.Message}",
+                ProcessingTimeMs = (int)totalTime.TotalMilliseconds
             });
         }
     }
 
-    // 🆕 MÉTODO AUXILIAR: Asignar chunks a preguntas
+    // ════════════════════════════════════════════════════════════
+    // MÉTODOS AUXILIARES
+    // ════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Asigna chunks a preguntas para trazabilidad
+    /// </summary>
     private void AssignChunksToQuestions(
         List<StudyQuestion> questions,
         List<string> chunkIds)
@@ -207,86 +463,28 @@ public class DocumentController : ControllerBase
                 .ToList();
 
             _logger.LogDebug(
-                "Pregunta {Index} asignada con {Count} chunks: {ChunkIds}",
+                "🔗 Pregunta {Index} asignada con {Count} chunks: {ChunkIds}",
                 i + 1,
                 questions[i].SourceChunkIds.Count,
                 string.Join(", ", questions[i].SourceChunkIds.Select(c => c.Substring(0, 8))));
         }
     }
 
-    // MÉTODO EXISTENTE (mantener como está)
+    /// <summary>
+    /// Calcula cantidad óptima de preguntas según el tamaño del documento
+    /// </summary>
     private int CalculateOptimalQuestionCount(int contentLength, int chunkCount)
     {
         // Lógica simple: 1 pregunta por cada ~500 caracteres
         // Mínimo 5, máximo 50
         var calculated = Math.Max(5, Math.Min(50, contentLength / 500));
 
-        _logger.LogInformation(
-            "Calculando preguntas: {Length} chars, {Chunks} chunks → {Questions} preguntas",
+        _logger.LogDebug(
+            "📊 Cálculo de preguntas: {Length} chars, {Chunks} chunks → {Questions} preguntas",
             contentLength, chunkCount, calculated);
 
         return calculated;
     }
-
-
-    public class EnhancedDocumentUploadResponse
-    {
-        public bool Success { get; set; }
-
-        public LegalDocument? Document { get; set; }
-
-        // Información de Vectorización
-        public List<string> ChunkIds { get; set; } = new();
-        public int ChunksCreated { get; set; }
-        public int TotalCharacters { get; set; }
-
-        // Información de Preguntas Generadas
-        public int QuestionsGeneratedCount { get; set; }
-        public List<int> SavedQuestionIds { get; set; } = new();
-        public List<StudyQuestion> SampleQuestions { get; set; } = new();
-
-        /// <summary>
-        /// Distribución de preguntas por nivel de dificultad
-        /// </summary>
-        public QuestionDifficultyBreakdown? QuestionBreakdown { get; set; }
-
-        // Metadatos de procesamiento
-        public int? ProcessingTimeMs { get; set; }
-        public string Message { get; set; } = string.Empty;
-    }
-
-    /// <summary>
-    /// Distribución de preguntas generadas por nivel de dificultad
-    /// </summary>
-    public class QuestionDifficultyBreakdown
-    {
-        public int Basico { get; set; }
-        public int Intermedio { get; set; }
-        public int Avanzado { get; set; }
-
-        /// <summary>
-        /// Total de preguntas (suma de todos los niveles)
-        /// </summary>
-        public int Total => Basico + Intermedio + Avanzado;
-
-        /// <summary>
-        /// Porcentaje de cada nivel sobre el total
-        /// </summary>
-        public BreakdownPercentages Percentages => new()
-        {
-            BasicoPercent = Total > 0 ? Math.Round((decimal)Basico / Total * 100, 1) : 0,
-            IntermedioPercent = Total > 0 ? Math.Round((decimal)Intermedio / Total * 100, 1) : 0,
-            AvanzadoPercent = Total > 0 ? Math.Round((decimal)Avanzado / Total * 100, 1) : 0
-        };
-    }
-
-    public class BreakdownPercentages
-    {
-        public decimal BasicoPercent { get; set; }
-        public decimal IntermedioPercent { get; set; }
-        public decimal AvanzadoPercent { get; set; }
-    }
-
 
     [HttpPost("upload-text")]
     public async Task<ActionResult<EnhancedDocumentUploadResponse>> UploadTextContent([FromBody] TextUploadRequest request)
@@ -302,7 +500,6 @@ public class DocumentController : ControllerBase
             var document = await _documentProcessing.ProcessDocumentAsync(request.Content, fileName, request.DocumentType);
             var chunks = await _textChunking.CreateChunksAsync(request.Content, maxChunkSize: 1000, overlap: 200);
 
-            // Usar el servicio para crear metadatos
             var baseMetadata = _metadataBuilder.BuildFromText(document, fileName, request.Content.Length, source: "Manual");
             var chunkMetadataList = _metadataBuilder.BuildChunkMetadataList(baseMetadata, chunks.Count, document.Id);
 
@@ -340,15 +537,6 @@ public class DocumentController : ControllerBase
         }
     }
 
-
-
-
-
-    // 🆕 AGREGAR a DocumentController.cs
-
-    /// <summary>
-    /// Genera preguntas adicionales para un documento ya subido
-    /// </summary>
     [HttpPost("{documentId}/generate-questions")]
     public async Task<ActionResult> GenerateMoreQuestions(
         Guid documentId,
@@ -360,7 +548,6 @@ public class DocumentController : ControllerBase
         {
             _logger.LogInformation("🤖 Generando {Count} preguntas adicionales para documento {DocId}", count, documentId);
 
-            // 1️⃣ RECUPERAR DOCUMENTO DE QDRANT
             var document = await GetDocumentByIdAsync(documentId);
 
             if (document == null)
@@ -372,10 +559,8 @@ public class DocumentController : ControllerBase
                 });
             }
 
-            // 2️⃣ GENERAR PREGUNTAS
             var questions = await _questionGeneration.GenerateQuestionsFromDocument(document, count);
 
-            // 3️⃣ GUARDAR EN BD
             var areaId = await _questionPersistence.GetAreaIdByName(
                 document.LegalAreas.FirstOrDefault() ?? "General"
             );
@@ -413,91 +598,6 @@ public class DocumentController : ControllerBase
             });
         }
     }
-
-    /// <summary>
-    /// Obtiene estadísticas de preguntas por documento
-    /// </summary>
-    /*
-    [HttpGet("{documentId}/questions-stats")]
-    public async Task<ActionResult> GetDocumentQuestionsStats(Guid documentId)
-    {
-        try
-        {
-            var connection = _context.Database.GetDbConnection();
-            if (connection.State != System.Data.ConnectionState.Open)
-                await connection.OpenAsync();
-
-            using var command = connection.CreateCommand();
-
-            command.CommandText = @"
-        SELECT 
-            COUNT(*) as total_questions,
-            COUNT(CASE WHEN pg.modalidad_id = 1 THEN 1 END) as written_questions,
-            COUNT(CASE WHEN pg.modalidad_id = 2 THEN 1 END) as oral_questions,
-            COUNT(CASE WHEN pg.tipo = 'seleccion_multiple' THEN 1 END) as multiple_choice,
-            COUNT(CASE WHEN pg.tipo = 'verdadero_falso' THEN 1 END) as true_false,
-            COUNT(CASE WHEN pg.nivel = 'basico' THEN 1 END) as basic,
-            COUNT(CASE WHEN pg.nivel = 'intermedio' THEN 1 END) as intermediate,
-            COUNT(CASE WHEN pg.nivel = 'avanzado' THEN 1 END) as advanced,
-            AVG(pg.veces_utilizada) as avg_times_used,
-            AVG(pg.tasa_acierto) as avg_success_rate
-        FROM preguntas_generadas pg
-        INNER JOIN temas t ON pg.tema_id = t.id
-        WHERE pg.creada_por LIKE $1
-          AND pg.activa = true";
-
-            command.Parameters.Add(new Npgsql.NpgsqlParameter
-            {
-                Value = $"%{documentId}%"
-            });
-
-            using var reader = await command.ExecuteReaderAsync();
-
-            if (await reader.ReadAsync())
-            {
-                return Ok(new
-                {
-                    success = true,
-                    documentId = documentId,
-                    stats = new
-                    {
-                        totalQuestions = reader.GetInt64(0),
-                        writtenQuestions = reader.GetInt64(1),
-                        oralQuestions = reader.GetInt64(2),
-                        multipleChoice = reader.GetInt64(3),
-                        trueFalse = reader.GetInt64(4),
-                        byDifficulty = new
-                        {
-                            basic = reader.GetInt64(5),
-                            intermediate = reader.GetInt64(6),
-                            advanced = reader.GetInt64(7)
-                        },
-                        usage = new
-                        {
-                            avgTimesUsed = reader.IsDBNull(8) ? 0.0 : reader.GetDouble(8),
-                            avgSuccessRate = reader.IsDBNull(9) ? 0.0 : (double)reader.GetDecimal(9)
-                        }
-                    }
-                });
-            }
-
-            return Ok(new
-            {
-                success = true,
-                documentId = documentId,
-                stats = new { totalQuestions = 0 }
-            });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error obteniendo estadísticas");
-            return StatusCode(500, new { success = false, message = ex.Message });
-        }
-    }
-
-
-    */
-
 
     [HttpPost("test-document")]
     public async Task<ActionResult<EnhancedDocumentUploadResponse>> TestWithSampleDocument()
@@ -775,14 +875,12 @@ JURISPRUDENCIA RELEVANTE:
             return StatusCode(500, "Error interno del servidor");
         }
     }
-    // En DocumentController.cs
 
     [HttpGet("qdrant/stats")]
     public async Task<ActionResult> ListAllQdrantDocuments()
     {
         try
         {
-            // Obtener estadísticas de la colección
             var stats = await _vectorService.GetCollectionStatsAsync();
 
             return Ok(new
@@ -805,6 +903,7 @@ JURISPRUDENCIA RELEVANTE:
             });
         }
     }
+
     private async Task<LegalDocument?> GetDocumentByIdAsync(Guid documentId)
     {
         try
@@ -892,7 +991,10 @@ JURISPRUDENCIA RELEVANTE:
     }
 }
 
-// DTOs
+// ═══════════════════════════════════════════════════════════════════
+// DTOs Y CLASES DE RESPUESTA
+// ═══════════════════════════════════════════════════════════════════
+
 public class EnhancedDocumentUploadResponse
 {
     public bool Success { get; set; }
@@ -900,9 +1002,48 @@ public class EnhancedDocumentUploadResponse
     public List<string> ChunkIds { get; set; } = new();
     public int ChunksCreated { get; set; }
     public int TotalCharacters { get; set; }
+    public int QuestionsGeneratedCount { get; set; }
+    public List<int> SavedQuestionIds { get; set; } = new();
     public List<StudyQuestion> SampleQuestions { get; set; } = new();
-    public int ProcessingTimeMs { get; set; }
+    public QuestionDifficultyBreakdown? QuestionBreakdown { get; set; }
+    public List<ClassificationInfo> Classifications { get; set; } = new();
+    public int? ProcessingTimeMs { get; set; }
     public string Message { get; set; } = string.Empty;
+}
+
+public class QuestionDifficultyBreakdown
+{
+    public int Basico { get; set; }
+    public int Intermedio { get; set; }
+    public int Avanzado { get; set; }
+
+    public int Total => Basico + Intermedio + Avanzado;
+
+    public BreakdownPercentages Percentages => new()
+    {
+        BasicoPercent = Total > 0 ? Math.Round((decimal)Basico / Total * 100, 1) : 0,
+        IntermedioPercent = Total > 0 ? Math.Round((decimal)Intermedio / Total * 100, 1) : 0,
+        AvanzadoPercent = Total > 0 ? Math.Round((decimal)Avanzado / Total * 100, 1) : 0
+    };
+}
+
+public class BreakdownPercentages
+{
+    public decimal BasicoPercent { get; set; }
+    public decimal IntermedioPercent { get; set; }
+    public decimal AvanzadoPercent { get; set; }
+}
+
+/// <summary>
+/// Información de clasificación de contenido en temas
+/// </summary>
+public class ClassificationInfo
+{
+    public int TemaId { get; set; }
+    public string TemaNombre { get; set; } = string.Empty;
+    public int? SubtemaId { get; set; }
+    public string? SubtemaNombre { get; set; }
+    public double Confidence { get; set; }
 }
 
 public class TextUploadRequest

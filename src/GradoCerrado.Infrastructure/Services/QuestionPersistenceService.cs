@@ -1,8 +1,10 @@
 ﻿using GradoCerrado.Application.Interfaces;
 using GradoCerrado.Domain.Entities;
 using GradoCerrado.Domain.Models;
-using Microsoft.Extensions.Logging;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Npgsql;
+using System.Data;
 
 namespace GradoCerrado.Infrastructure.Services;
 
@@ -19,87 +21,69 @@ public class QuestionPersistenceService : IQuestionPersistenceService
         _logger = logger;
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // MÉTODOS PÚBLICOS (implementan la interfaz)
-    // ═══════════════════════════════════════════════════════════════
-
     public async Task<List<int>> SaveQuestionsToDatabase(
-       List<StudyQuestion> studyQuestions,
-       int temaId,
-       int? subtemaId = null,
-       int modalidadId = 1,
-       string creadaPor = "AI")
+        List<StudyQuestion> studyQuestions,
+        int temaId,
+        int? subtemaId = null,
+        int modalidadId = 1,
+        string creadaPor = "AI")
     {
-        var savedIds = new List<int>();
-
         try
         {
-            const int MODALIDAD_ESCRITO = 1;
-
-            var connection = _context.Database.GetDbConnection();
-            if (connection.State != System.Data.ConnectionState.Open)
-                await connection.OpenAsync();
+            var savedIds = new List<int>();
 
             foreach (var question in studyQuestions)
             {
-                string tipoPregunta = question.Type == QuestionType.MultipleChoice
-                    ? "seleccion_multiple"
-                    : "verdadero_falso";
+                // CORRECCIÓN: Usar valores del enum con snake_case
+                var tipoPregunta = question.Type == QuestionType.MultipleChoice
+                    ? TipoPregunta.seleccion_multiple
+                    : TipoPregunta.verdadero_falso;
 
-                string nivelDificultad = question.Difficulty switch
+                var nivelDificultad = question.Difficulty switch
                 {
-                    DifficultyLevel.Basic => "basico",
-                    DifficultyLevel.Intermediate => "intermedio",
-                    DifficultyLevel.Advanced => "avanzado",
-                    _ => "intermedio"
+                    DifficultyLevel.Basic => 1,
+                    DifficultyLevel.Intermediate => 2,
+                    DifficultyLevel.Advanced => 3,
+                    _ => 2
                 };
 
-                bool? respuestaBoolean = question.Type == QuestionType.TrueFalse ? question.IsTrue : null;
-                string? respuestaOpcion = question.Type == QuestionType.MultipleChoice
-                    ? GetCorrectOptionLetter(question)?.ToString()
-                    : null;
-                string respuestaModelo = question.CorrectAnswer ?? "";
-                string explicacion = question.Explanation ?? "";
-                string modeloIA = "gpt-4-turbo";
-                decimal calidad = 0.85m;
-                var ahora = DateTime.SpecifyKind(DateTime.Now, DateTimeKind.Unspecified);
+                var connection = _context.Database.GetDbConnection();
+                if (connection.State != ConnectionState.Open)
+                    await connection.OpenAsync();
 
                 using var command = connection.CreateCommand();
 
-                // 🆕 QUERY ACTUALIZADA CON source_chunks
                 command.CommandText = @"
-                INSERT INTO preguntas_generadas 
-                (tipo, modalidad_id, tema_id, subtema_id, nivel, texto_pregunta, respuesta_correcta_boolean, 
-                 respuesta_correcta_opcion, respuesta_modelo, explicacion, activa, creada_por, 
-                 fecha_creacion, fecha_actualizacion, veces_utilizada, veces_correcta, modelo_ia, calidad_estimada,
-                 source_chunks)
-                VALUES 
-                ($1::tipo_pregunta, $2, $3, $4, $5::nivel_dificultad, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
-                RETURNING id";
+                    INSERT INTO preguntas_generadas (
+                        tema_id, subtema_id, modalidad_id, tipo_pregunta,
+                        texto_pregunta, respuesta_correcta, respuesta_correcta_boolean,
+                        explicacion, nivel_dificultad, activa, creada_por,
+                        fecha_creacion, veces_utilizada, veces_correcta, contexto_fragmentos
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+                    ) RETURNING id";
 
-                command.Parameters.Add(new Npgsql.NpgsqlParameter { Value = tipoPregunta });
-                command.Parameters.Add(new Npgsql.NpgsqlParameter { Value = MODALIDAD_ESCRITO });
-                command.Parameters.Add(new Npgsql.NpgsqlParameter { Value = temaId });
-                command.Parameters.Add(new Npgsql.NpgsqlParameter { Value = (object?)subtemaId ?? DBNull.Value });
-                command.Parameters.Add(new Npgsql.NpgsqlParameter { Value = nivelDificultad });
-                command.Parameters.Add(new Npgsql.NpgsqlParameter { Value = question.QuestionText });
-                command.Parameters.Add(new Npgsql.NpgsqlParameter { Value = (object?)respuestaBoolean ?? DBNull.Value });
-                command.Parameters.Add(new Npgsql.NpgsqlParameter { Value = (object?)respuestaOpcion ?? DBNull.Value });
-                command.Parameters.Add(new Npgsql.NpgsqlParameter { Value = respuestaModelo });
-                command.Parameters.Add(new Npgsql.NpgsqlParameter { Value = explicacion });
-                command.Parameters.Add(new Npgsql.NpgsqlParameter { Value = true });
-                command.Parameters.Add(new Npgsql.NpgsqlParameter { Value = creadaPor });
-                command.Parameters.Add(new Npgsql.NpgsqlParameter { Value = ahora });
-                command.Parameters.Add(new Npgsql.NpgsqlParameter { Value = ahora });
-                command.Parameters.Add(new Npgsql.NpgsqlParameter { Value = 0 });
-                command.Parameters.Add(new Npgsql.NpgsqlParameter { Value = 0 });
-                command.Parameters.Add(new Npgsql.NpgsqlParameter { Value = modeloIA });
-                command.Parameters.Add(new Npgsql.NpgsqlParameter { Value = calidad });
-
-                // 🆕 PARÁMETRO 19: source_chunks
-                command.Parameters.Add(new Npgsql.NpgsqlParameter
+                command.Parameters.Add(new NpgsqlParameter { Value = temaId });
+                command.Parameters.Add(new NpgsqlParameter { Value = (object?)subtemaId ?? DBNull.Value });
+                command.Parameters.Add(new NpgsqlParameter { Value = modalidadId });
+                command.Parameters.Add(new NpgsqlParameter
                 {
-                    Value = question.SourceChunkIds.Any()
+                    Value = tipoPregunta.ToString(),
+                    NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Unknown
+                });
+                command.Parameters.Add(new NpgsqlParameter { Value = question.QuestionText });
+                command.Parameters.Add(new NpgsqlParameter { Value = (object?)GetCorrectOptionLetter(question) ?? DBNull.Value });
+                command.Parameters.Add(new NpgsqlParameter { Value = (object?)question.IsTrue ?? DBNull.Value });
+                command.Parameters.Add(new NpgsqlParameter { Value = question.Explanation ?? "Sin explicación" });
+                command.Parameters.Add(new NpgsqlParameter { Value = nivelDificultad });
+                command.Parameters.Add(new NpgsqlParameter { Value = true });
+                command.Parameters.Add(new NpgsqlParameter { Value = creadaPor });
+                command.Parameters.Add(new NpgsqlParameter { Value = DateTime.UtcNow });
+                command.Parameters.Add(new NpgsqlParameter { Value = 0 });
+                command.Parameters.Add(new NpgsqlParameter { Value = 0 });
+                command.Parameters.Add(new NpgsqlParameter
+                {
+                    Value = question.SourceChunkIds != null && question.SourceChunkIds.Any()
                         ? question.SourceChunkIds.ToArray()
                         : (object)DBNull.Value,
                     NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Array | NpgsqlTypes.NpgsqlDbType.Text
@@ -108,13 +92,14 @@ public class QuestionPersistenceService : IQuestionPersistenceService
                 var result = await command.ExecuteScalarAsync();
                 var preguntaId = Convert.ToInt32(result);
 
-                // Guardar opciones
+                // Guardar opciones - SIEMPRE 3 OPCIONES (A, B, C)
                 if (question.Type == QuestionType.MultipleChoice && question.Options != null)
                 {
                     var opciones = new List<PreguntaOpcione>();
-                    char[] letras = { 'A', 'B', 'C', 'D' };
+                    char[] letras = { 'A', 'B', 'C' }; // CAMBIO: Solo 3 letras
 
-                    for (int i = 0; i < Math.Min(question.Options.Count, 4); i++)
+                    // Tomar solo las primeras 3 opciones
+                    for (int i = 0; i < Math.Min(question.Options.Count, 3); i++)
                     {
                         opciones.Add(new PreguntaOpcione
                         {
@@ -133,7 +118,7 @@ public class QuestionPersistenceService : IQuestionPersistenceService
 
                 _logger.LogInformation(
                     "Pregunta guardada: ID {Id}, Tipo: {Tipo}, Nivel: {Nivel}, Chunks: {ChunkCount}",
-                    preguntaId, tipoPregunta, nivelDificultad, question.SourceChunkIds.Count);
+                    preguntaId, tipoPregunta, nivelDificultad, question.SourceChunkIds?.Count ?? 0);
             }
 
             return savedIds;
@@ -145,7 +130,6 @@ public class QuestionPersistenceService : IQuestionPersistenceService
         }
     }
 
-    // Método existente - mantener como está
     private char? ExtractCorrectOptionLetter(StudyQuestion question)
     {
         if (question.Options == null || !question.Options.Any())
@@ -201,10 +185,6 @@ public class QuestionPersistenceService : IQuestionPersistenceService
 
         return area.Id;
     }
-
-    // ═══════════════════════════════════════════════════════════════
-    // MÉTODOS PRIVADOS (no están en la interfaz)
-    // ═══════════════════════════════════════════════════════════════
 
     private char? GetCorrectOptionLetter(StudyQuestion question)
     {

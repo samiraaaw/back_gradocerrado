@@ -43,6 +43,8 @@ public partial class Test
 
     public string? NotasAdicionales { get; set; }
 
+    public DateOnly? FechaTest { get; set; }
+
     public DateTime? FechaCreacion { get; set; }
 
     public virtual Area? Area { get; set; }

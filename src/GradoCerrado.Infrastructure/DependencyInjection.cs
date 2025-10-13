@@ -5,6 +5,7 @@ using GradoCerrado.Infrastructure.Repositories;
 using GradoCerrado.Infrastructure.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -27,6 +28,13 @@ public static class DependencyInjection
         // ✅ TODOS LOS SERVICIOS DE IA USAN LANGCHAIN
         services.AddScoped<IAIService, LangChainQuestionService>();
         services.AddScoped<IEmbeddingService, LangChainEmbeddingService>();
+        // ═══════════════════════════════════════════════════════
+        // 🆕 RATE LIMITER (SINGLETON - COMPARTIDO POR TODA LA APP)
+        // ═══════════════════════════════════════════════════════
+
+
+        // 🆕 RATE LIMITER (SINGLETON para compartir estado entre todos los requests)
+        services.AddSingleton<IRateLimiter, OpenAIRateLimiter>();
 
         // Servicios de vectores y procesamiento
         services.AddScoped<IVectorService, QdrantService>();
@@ -52,6 +60,21 @@ public static class DependencyInjection
 
         // HttpClient
         services.AddHttpClient();
+
+        // ✅ AGREGAR ESTAS LÍNEAS:
+
+        // Configuración de Firebase
+        services.Configure<FirebaseSettings>(
+            configuration.GetSection(FirebaseSettings.SectionName));
+
+        services.Configure<NotificationSettings>(
+            configuration.GetSection(NotificationSettings.SectionName));
+
+        // Servicio de Push Notifications
+        services.AddSingleton<IPushNotificationService, FirebasePushNotificationService>();
+
+        // Servicio Background (Singleton)
+        services.AddSingleton<IHostedService, NotificationBackgroundService>();
 
         return services;
     }

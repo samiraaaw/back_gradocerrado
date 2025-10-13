@@ -62,8 +62,39 @@ public class GradocerradoContext : DbContext
             entity.Property(e => e.UltimoAcceso).HasColumnName("ultimo_acceso").HasColumnType("timestamp without time zone").HasDefaultValueSql("CURRENT_TIMESTAMP");
             entity.Property(e => e.Activo).HasColumnName("activo").HasDefaultValue(true);
             entity.Property(e => e.Verificado).HasColumnName("verificado").HasDefaultValue(false);
+
+            entity.Property(e => e.FrecuenciaEstudioSemanal)
+                .HasColumnName("frecuencia_estudio_semanal")
+                .HasDefaultValue(3);
+
+            entity.Property(e => e.ObjetivoDiasEstudio)
+                .HasColumnName("objetivo_dias_estudio")
+                .HasMaxLength(50)
+                .HasDefaultValue("flexible");
+
+            entity.Property(e => e.DiasPreferidosEstudio)
+                .HasColumnName("dias_preferidos_estudio")
+                .HasColumnType("jsonb");
+
+            entity.Property(e => e.RecordatorioEstudioActivo)
+                .HasColumnName("recordatorio_estudio_activo")
+                .HasDefaultValue(true);
+
+            entity.Property(e => e.HoraRecordatorio)
+                .HasColumnName("hora_recordatorio")
+                .HasColumnType("time");
+
+            // ✅ AGREGAR ESTAS LÍNEAS AQUÍ (ANTES del HasIndex)
+            entity.Property(e => e.ModoAdaptativoActivo)
+                .HasColumnName("modo_adaptativo_activo")
+                .HasDefaultValue(false);
+
+            entity.Property(e => e.FechaModificacion)
+                .HasColumnName("fecha_modificacion")  // ← snake_case
+                .HasColumnType("timestamp without time zone");
+
             entity.HasIndex(e => e.Email).IsUnique();
-        });
+        }); 
 
         modelBuilder.Entity<Area>(entity =>
         {
@@ -211,6 +242,9 @@ public class GradocerradoContext : DbContext
             entity.Property(e => e.TipoTestId).HasColumnName("tipo_test_id");
             entity.Property(e => e.AreaId).HasColumnName("area_id");
             entity.Property(e => e.FechaCreacion).HasColumnName("fecha_creacion").HasColumnType("timestamp without time zone");
+            entity.Property(e => e.FechaTest)
+            .HasColumnName("fecha_test")
+            .HasColumnType("date");
         });
 
         modelBuilder.Entity<PreguntasGenerada>(entity =>

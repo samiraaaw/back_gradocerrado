@@ -6,6 +6,7 @@ using DocumentFormat.OpenXml.Office2016.Drawing.ChartDrawing;
 using GradoCerrado.Application.Interfaces;
 using GradoCerrado.Infrastructure.Repositories;
 using GradoCerrado.Infrastructure.Services;
+using GradoCerrado.Application.Services;
 
 // ✅ CONFIGURACIÓN GLOBAL PARA NPGSQL DATETIME (CRÍTICO PARA AZURE POSTGRESQL)
 AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
@@ -28,6 +29,8 @@ dataSourceBuilder.MapEnum<PrioridadNotificacion>("prioridad_notificacion");
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.AddScoped<INotificacionService, NotificacionService>();
+
 
 // ✅ CONFIGURACIÓN DE BASE DE DATOS AZURE POSTGRESQL
 builder.Services.AddDbContext<GradocerradoContext>(options =>
@@ -59,10 +62,12 @@ builder.Services.AddDbContext<GradocerradoContext>(options =>
     }
 });
 
-
-
 // ✅ SERVICIOS DE INFRASTRUCTURE (OpenAI + Qdrant)  
 builder.Services.AddInfrastructure(builder.Configuration);
+
+// 🆕 REGISTRAR SERVICIO CLASIFICADOR (DESPUÉS de AddInfrastructure)
+// IMPORTANTE: Debe ir DESPUÉS de AddInfrastructure porque depende de IAIService
+builder.Services.AddScoped<IContentClassifierService, ContentClassifierService>();
 
 // ✅ CONFIGURACIÓN DE CORS
 builder.Services.AddCors(options =>
@@ -75,9 +80,13 @@ builder.Services.AddCors(options =>
               .AllowCredentials();
     });
 });
+
 // 🆕 REGISTRAR REPOSITORIOS
 builder.Services.AddScoped<ITestRepository, TestRepository>();
 builder.Services.AddScoped<IPreguntaRepository, PreguntaRepository>();
+
+// Ya deberías tener esta línea:
+builder.Services.AddInfrastructure(builder.Configuration);
 
 var app = builder.Build();
 
@@ -100,7 +109,7 @@ app.MapControllers();
 // Health check endpoint
 app.MapGet("/api/status", () => new {
     status = "OK",
-    timestamp = DateTime.Now, // ✅ Usar DateTime.Now sin UTC
+    timestamp = DateTime.Now,
     message = "Backend funcionando correctamente con Azure PostgreSQL"
 });
 
@@ -117,7 +126,7 @@ app.MapGet("/api/test-db", async (GradocerradoContext context) =>
             canConnect,
             studentCount,
             message = canConnect ? "Conexión exitosa a Azure PostgreSQL" : "Error de conexión",
-            timestamp = DateTime.Now, // ✅ Sin UTC
+            timestamp = DateTime.Now,
             database = "Azure PostgreSQL"
         });
     }
@@ -140,6 +149,18 @@ app.MapGet("/api/config-check", (IConfiguration config) =>
         isAzurePostgreSQL = isAzure,
         host = isAzure ? "Azure PostgreSQL" : "Local/Other",
         timestamp = DateTime.Now
+    });
+});
+
+// Y al final del archivo, antes de app.Run():
+app.MapGet("/api/notifications/health", async (
+    IPushNotificationService pushService) =>
+{
+    var isHealthy = await pushService.TestConnectionAsync();
+    return Results.Ok(new
+    {
+        firebase = isHealthy ? "OK" : "ERROR",
+        timestamp = DateTime.UtcNow
     });
 });
 
